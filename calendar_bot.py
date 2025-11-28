@@ -5,11 +5,71 @@ from datetime import datetime, timedelta
 import asyncio
 import warnings
 from urllib.parse import quote
+import re
 
 # 忽略FP16警告
 warnings.filterwarnings("ignore", message="FP16 is not supported on CPU")
 
 logger = logging.getLogger(__name__)
+
+def parse_time_flexible(time_str: str, reference_date: datetime) -> datetime:
+    """
+    灵活解析时间字符串，支持多种格式
+    
+    支持格式：
+    - 24小时制: "14:00", "9:30"
+    - 12小时制: "2:00 PM", "9:30 AM"
+    - 中文格式: "下午2:00", "上午9:30"
+    """
+    time_str = time_str.strip()
+    
+    # 标准格式尝试
+    formats = [
+        "%I:%M %p",    # 2:00 PM
+        "%H:%M",       # 14:00
+        "%I:%M%p",     # 2:00PM (无空格)
+        "%I %p",       # 2 PM (只有小时)
+    ]
+    
+    for fmt in formats:
+        try:
+            parsed = datetime.strptime(time_str, fmt)
+            return parsed.replace(
+                year=reference_date.year,
+                month=reference_date.month,
+                day=reference_date.day
+            )
+        except ValueError:
+            continue
+    
+    # 正则表达式兜底解析
+    # 匹配模式: 数字:数字 [可选的AM/PM/上午/下午]
+    match = re.search(r'(\d{1,2}):?(\d{2})?', time_str)
+    if match:
+        hour = int(match.group(1))
+        minute = int(match.group(2)) if match.group(2) else 0
+        
+        # 处理 AM/PM 标识
+        is_pm = 'PM' in time_str.upper() or '下午' in time_str or 'pm' in time_str.lower()
+        is_am = 'AM' in time_str.upper() or '上午' in time_str or 'am' in time_str.lower()
+        
+        if is_pm and hour < 12:
+            hour += 12
+        elif is_am and hour == 12:
+            hour = 0  # 12:00 AM 是午夜
+        
+        # 如果没有 AM/PM 标识且小时数小于等于12，可能有歧义
+        # 这里假设用户使用24小时制
+        
+        return datetime(
+            reference_date.year,
+            reference_date.month,
+            reference_date.day,
+            hour, minute
+        )
+    
+    raise ValueError(f"无法解析时间: {time_str}")
+
 
 class CalendarBot:
     def __init__(self):
@@ -56,6 +116,10 @@ class CalendarBot:
 
     def _start_browser_monitor(self):
         """启动浏览器状态监控"""
+        # 先取消旧任务（修复内存泄漏）
+        if self._browser_check_task and not self._browser_check_task.done():
+            self._browser_check_task.cancel()
+        
         async def monitor():
             while True:
                 try:
@@ -65,11 +129,12 @@ class CalendarBot:
                             await self.page.evaluate("() => true")
                         except:
                             logger.warning("⚠️ 浏览器可能已关闭，将在下次使用时自动恢复")
+                except asyncio.CancelledError:
+                    break
                 except Exception as e:
                     logger.debug(f"浏览器监控错误: {e}")
         
-        if self._browser_check_task is None or self._browser_check_task.done():
-            self._browser_check_task = asyncio.create_task(monitor())
+        self._browser_check_task = asyncio.create_task(monitor())
 
     async def _close_browser_only(self):
         """只关闭浏览器，不关闭playwright"""
@@ -90,10 +155,13 @@ class CalendarBot:
         """确保浏览器处于可用状态"""
         try:
             if self.page and not self.page.is_closed():
-                await self.page.evaluate("() => true")
+                await asyncio.wait_for(
+                    self.page.evaluate("() => true"),
+                    timeout=2.0
+                )
                 logger.info("✅ 浏览器状态正常")
                 return True
-        except Exception as e:
+        except (asyncio.TimeoutError, Exception) as e:
             logger.warning(f"⚠️ 浏览器状态检查失败: {e}")
         
         logger.warning("⚠️ 检测到浏览器已关闭，正在尝试自动恢复...")
@@ -127,6 +195,7 @@ class CalendarBot:
         return False
 
     async def _load_saved_session(self):
+        """加载保存的浏览器会话"""
         browsers_to_try = [
             ("chrome", "系统 Chrome"),
             ("chromium", "Playwright Chromium"),
@@ -174,6 +243,7 @@ class CalendarBot:
         self.page = await self.context.new_page()
 
     async def _verify_login(self) -> bool:
+        """验证当前登录状态是否有效"""
         try:
             logger.info("验证登录状态...")
             await self.page.goto("https://calendar.google.com", wait_until="domcontentloaded", timeout=15000)
@@ -233,6 +303,155 @@ class CalendarBot:
         await self.context.storage_state(path=str(self.storage_state_path))
         self.is_logged_in = True
         logger.info("✅ 登录状态已保存")
+
+    async def check_time_conflict(self, start_time: datetime, end_time: datetime) -> dict:
+        """
+        检查时间冲突 - 改进版（2025 更新）
+        
+        修复内容：
+        1. 用 regex 提取时间范围，更可靠
+        2. 直接用事件 inner_text，避免类名失效
+        3. 更好处理中文/英文时间格式
+        4. 增强全天事件过滤和日志
+        """
+        logger.info("=" * 80)
+        logger.info(f"🔍 检查时间冲突")
+        logger.info(f"   开始: {start_time.strftime('%Y-%m-%d %H:%M')}")
+        logger.info(f"   结束: {end_time.strftime('%Y-%m-%d %H:%M')}")
+        logger.info("=" * 80)
+        
+        result = {
+            'has_conflict': False,
+            'conflicting_events': [],
+            'error': None
+        }
+        
+        try:
+            # 确保浏览器可用
+            if not await self._ensure_browser_ready():
+                result['error'] = "无法初始化浏览器"
+                return result
+            
+            # 处理跨天的用户输入
+            check_start = start_time
+            check_end = end_time
+            if check_end < check_start:
+                check_end += timedelta(days=1)
+                logger.info(f"⚠️ 检测到跨天时间，已调整结束时间为次日")
+            
+            # 导航到目标日期的日视图
+            date_str = start_time.strftime("%Y/%m/%d")
+            check_url = f"https://calendar.google.com/calendar/u/0/r/day/{date_str}"
+            
+            logger.info(f"🌐 导航到日期视图: {check_url}")
+            await self.page.goto(check_url, wait_until="domcontentloaded", timeout=30000)
+            await self.page.wait_for_timeout(5000)  # 等待加载事件
+            
+            # 查找现有事件 - 保留原有选择器，但添加更通用的
+            event_selectors = [
+                '[data-eventid]',
+                '.YvjgZe',  # 旧版，可能失效
+                '[role="button"][data-event-id]',
+                '.ynRLnc',
+                '[data-view-family="EVENT"]',
+                # 新增通用选择器：事件通常是可点击的 div/button
+                'div[role="row"] > div[style*="top"]',  # 日视图事件块
+                '.bEdKdb',  # 常见事件容器类（2025 可能有效）
+            ]
+            
+            events = []
+            for selector in event_selectors:
+                try:
+                    events = await self.page.query_selector_all(selector)
+                    if events:
+                        logger.info(f"✅ 找到 {len(events)} 个事件 (选择器: {selector})")
+                        break
+                except Exception as e:
+                    logger.debug(f"选择器 {selector} 失败: {e}")
+                    continue
+            
+            if not events:
+                logger.info("✅ 当天无事件，无冲突")
+                return result
+            
+            # 提取并检查每个事件
+            for idx, event in enumerate(events):
+                try:
+                    # 直接取整个事件文本
+                    full_text = await event.inner_text()
+                    if not full_text or len(full_text.strip()) < 5:
+                        continue
+                    
+                    logger.info(f"📅 [{idx+1}] 事件全文: {full_text}")
+                    
+                    # 跳过全天事件（检查关键词或无时间）
+                    if any(keyword in full_text for keyword in ['全天', 'All day', 'all-day']):
+                        logger.info(f"   ↳ 跳过全天事件")
+                        continue
+                    
+                    # 用 regex 提取时间范围：匹配 HH:MM – HH:MM 或 HH:MM - HH:MM
+                    time_pattern = r'(\d{1,2}:\d{2})\s*[–\-\u2013\u2014]\s*(\d{1,2}:\d{2})'  # 支持 en/em dash
+                    match = re.search(time_pattern, full_text)
+                    if not match:
+                        logger.debug(f"   ↳ 无有效时间范围，跳过: {full_text[:50]}...")
+                        continue
+                    
+                    start_str, end_str = match.group(1), match.group(2)
+                    logger.info(f"   ↳ 提取时间: {start_str} – {end_str}")
+                    
+                    # 使用灵活解析函数
+                    try:
+                        event_start = parse_time_flexible(start_str, start_time)
+                        event_end = parse_time_flexible(end_str, start_time)
+                    except ValueError as e:
+                        logger.warning(f"   ↳ 时间解析失败: {e}")
+                        continue
+                    
+                    # 处理跨天事件
+                    if event_end <= event_start:
+                        event_end += timedelta(days=1)
+                        logger.info(f"   ↳ 跨天事件: {event_start.strftime('%H:%M')} - 次日 {event_end.strftime('%H:%M')}")
+                    
+                    # 检查时间重叠：(check_start < event_end) and (check_end > event_start)
+                    has_overlap = (check_start < event_end) and (check_end > event_start)
+                    
+                    if has_overlap:
+                        overlap_start = max(check_start, event_start)
+                        overlap_end = min(check_end, event_end)
+                        logger.warning(f"⚠️ 时间冲突:")
+                        logger.warning(f"   已有: {event_start.strftime('%H:%M')} - {event_end.strftime('%H:%M')}")
+                        logger.warning(f"   新建: {check_start.strftime('%H:%M')} - {check_end.strftime('%H:%M')}")
+                        logger.warning(f"   重叠: {overlap_start.strftime('%H:%M')} - {overlap_end.strftime('%H:%M')}")
+                        
+                        result['has_conflict'] = True
+                        result['conflicting_events'].append({
+                            'start': event_start.strftime('%H:%M'),
+                            'end': event_end.strftime('%H:%M'),
+                            'original_text': full_text,
+                            'overlap_start': overlap_start.strftime('%H:%M'),
+                            'overlap_end': overlap_end.strftime('%H:%M'),
+                        })
+                    else:
+                        logger.info(f"   ✅ 无冲突")
+                        
+                except Exception as e:
+                    logger.debug(f"检查事件 {idx+1} 时出错: {e}")
+                    continue
+            
+            # 输出最终结果
+            if result['has_conflict']:
+                logger.warning(f"❌ 发现 {len(result['conflicting_events'])} 个时间冲突")
+                for conf in result['conflicting_events']:
+                    logger.warning(f"   - {conf['original_text'][:50]}... ({conf['start']}-{conf['end']})")
+            else:
+                logger.info(f"✅ 无时间冲突")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ 检查时间冲突失败: {e}", exc_info=True)
+            result['error'] = str(e)
+            return result
 
     async def create_event(self, title: str, start_time: datetime, end_time: datetime) -> dict:
         """创建日程事件 - 使用URL参数方式（最可靠）"""
@@ -413,7 +632,9 @@ class CalendarBot:
         except Exception as e:
             logger.warning(f"关闭资源时出错: {e}")
 
+
 async def test_calendar_bot():
+    """测试函数"""
     bot = CalendarBot()
     try:
         await bot.initialize()
@@ -422,6 +643,12 @@ async def test_calendar_bot():
         start_time = tomorrow.replace(hour=14, minute=0, second=0, microsecond=0)
         end_time = tomorrow.replace(hour=15, minute=0, second=0, microsecond=0)
         
+        # 测试冲突检查
+        logger.info("测试时间冲突检查...")
+        conflict_result = await bot.check_time_conflict(start_time, end_time)
+        logger.info(f"冲突检查结果: {conflict_result}")
+        
+        # 测试创建事件
         result = await bot.create_event("测试会议", start_time, end_time)
         if result['success']:
             logger.info(f"✅ 事件创建成功: {result['title']}")
@@ -432,6 +659,7 @@ async def test_calendar_bot():
         logger.error(f"测试过程中出错: {e}")
     finally:
         await bot.close()
+
 
 if __name__ == "__main__":
     asyncio.run(test_calendar_bot())
