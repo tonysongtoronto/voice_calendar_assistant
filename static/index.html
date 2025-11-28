@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>语音日程助手</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 800px;
+            width: 100%;
+            padding: 40px;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            color: #333;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            color: #666;
+            font-size: 1.1em;
+        }
+        
+        .voice-button {
+            width: 200px;
+            height: 200px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            color: white;
+            font-size: 1.2em;
+            cursor: pointer;
+            margin: 30px auto;
+            display: block;
+            transition: all 0.3s ease;
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
+        }
+        
+        .voice-button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 15px 40px rgba(102, 126, 234, 0.6);
+        }
+        
+        .voice-button:active {
+            transform: scale(0.95);
+        }
+        
+        .voice-button.recording {
+            animation: pulse 1.5s infinite;
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        }
+        
+        @keyframes pulse {
+            0%, 100% {
+                transform: scale(1);
+            }
+            50% {
+                transform: scale(1.1);
+            }
+        }
+        
+        .status {
+            text-align: center;
+            margin: 20px 0;
+            min-height: 30px;
+        }
+        
+        .status-text {
+            color: #666;
+            font-size: 1.1em;
+        }
+        
+        .status-text.active {
+            color: #667eea;
+            font-weight: bold;
+        }
+        
+        .conversation {
+            margin-top: 30px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .message {
+            margin: 15px 0;
+            padding: 15px;
+            border-radius: 10px;
+            animation: fadeIn 0.3s ease;
+        }
+        
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .message.user {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+        }
+        
+        .message.assistant {
+            background: #f3e5f5;
+            border-left: 4px solid #9c27b0;
+        }
+        
+        .message.error {
+            background: #ffebee;
+            border-left: 4px solid #f44336;
+        }
+        
+        .message-label {
+            font-weight: bold;
+            margin-bottom: 5px;
+            font-size: 0.9em;
+        }
+        
+        .message.user .message-label {
+            color: #2196f3;
+        }
+        
+        .message.assistant .message-label {
+            color: #9c27b0;
+        }
+        
+        .message.error .message-label {
+            color: #f44336;
+        }
+        
+        .message-text {
+            color: #333;
+            line-height: 1.5;
+        }
+        
+        .loading {
+            text-align: center;
+            margin: 20px 0;
+        }
+        
+        .loading-spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .instructions {
+            background: #f5f5f5;
+            padding: 20px;
+            border-radius: 10px;
+            margin-top: 30px;
+        }
+        
+        .instructions h3 {
+            color: #333;
+            margin-bottom: 15px;
+        }
+        
+        .instructions ul {
+            list-style-position: inside;
+            color: #666;
+        }
+        
+        .instructions li {
+            margin: 8px 0;
+        }
+        
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎙️ 语音日程助手</h1>
+            <p>点击按钮开始语音对话，自动管理您的 Google 日历</p>
+        </div>
+        
+        <button id="voiceButton" class="voice-button">
+            <span id="buttonText">开始语音对话</span>
+        </button>
+        
+        <div class="status">
+            <div id="statusText" class="status-text"></div>
+        </div>
+        
+        <div id="loading" class="loading hidden">
+            <div class="loading-spinner"></div>
+            <p style="margin-top: 10px; color: #666;">处理中...</p>
+        </div>
+        
+        <div id="conversation" class="conversation"></div>
+        
+        <div class="instructions">
+            <h3>使用说明</h3>
+            <ul>
+                <li>点击"开始语音对话"按钮开始录音</li>
+                <li>说出您的日程安排，例如："明天上午10点到11点，和CEO会议"</li>
+                <li>点击"停止录音"后，系统会自动处理并创建日程</li>
+                <li>首次使用需要手动登录 Google 账号</li>
+            </ul>
+        </div>
+    </div>
+    
+    <audio id="audioPlayer" style="display: none;"></audio>
+    
+    <script>
+        let ws = null;
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let isRecording = false;
+        
+        const voiceButton = document.getElementById('voiceButton');
+        const buttonText = document.getElementById('buttonText');
+        const statusText = document.getElementById('statusText');
+        const conversation = document.getElementById('conversation');
+        const loading = document.getElementById('loading');
+        const audioPlayer = document.getElementById('audioPlayer');
+        
+        // 连接 WebSocket
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws/voice`;
+            
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                console.log('WebSocket 连接成功');
+                setStatus('已连接到服务器', false, true);
+            };
+            
+            ws.onmessage = async (event) => {
+                const data = JSON.parse(event.data);
+                handleServerMessage(data);
+            };
+            
+            ws.onerror = (error) => {
+                console.error('WebSocket 错误:', error);
+                setStatus('连接错误，请刷新页面重试', true);
+            };
+            
+            ws.onclose = () => {
+                console.log('WebSocket 连接关闭');
+                setStatus('连接已断开');
+            };
+        }
+        
+        // 处理服务器消息
+        function handleServerMessage(data) {
+            console.log('收到消息:', data);
+            
+            switch(data.type) {
+                case 'audio_response':
+                    hideLoading();
+                    if (data.audio) {
+                        playAudio(data.audio);
+                    }
+                    addMessage('assistant', data.text);
+                    if (data.success) {
+                        setStatus('日程创建成功！', false, true);
+                    }
+                    break;
+                    
+                case 'transcript':
+                    addMessage('user', data.text);
+                    showLoading();
+                    setStatus('正在处理您的请求...', false, true);
+                    break;
+                    
+                case 'status':
+                    setStatus(data.message, false, true);
+                    break;
+                    
+                case 'error':
+                    hideLoading();
+                    addMessage('error', data.message);
+                    setStatus('处理失败', true);
+                    break;
+            }
+        }
+        
+        // 播放音频
+        function playAudio(base64Audio) {
+            try {
+                const audioBlob = base64ToBlob(base64Audio, 'audio/mp3');
+                const audioUrl = URL.createObjectURL(audioBlob);
+                audioPlayer.src = audioUrl;
+                audioPlayer.play();
+            } catch (error) {
+                console.error('播放音频失败:', error);
+            }
+        }
+        
+        // Base64 转 Blob
+        function base64ToBlob(base64, mimeType) {
+            const byteCharacters = atob(base64);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            return new Blob([byteArray], {type: mimeType});
+        }
+        
+        // 添加消息到对话框
+        function addMessage(type, text) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+            
+            const label = document.createElement('div');
+            label.className = 'message-label';
+            label.textContent = type === 'user' ? '您说：' : 
+                               type === 'assistant' ? '助手：' : '错误：';
+            
+            const textDiv = document.createElement('div');
+            textDiv.className = 'message-text';
+            textDiv.textContent = text;
+            
+            messageDiv.appendChild(label);
+            messageDiv.appendChild(textDiv);
+            conversation.appendChild(messageDiv);
+            
+            // 滚动到底部
+            conversation.scrollTop = conversation.scrollHeight;
+        }
+        
+        // 设置状态文本
+        function setStatus(text, isError = false, isActive = false) {
+            statusText.textContent = text;
+            statusText.className = 'status-text';
+            if (isActive) statusText.classList.add('active');
+            if (isError) statusText.style.color = '#f44336';
+        }
+        
+        // 显示/隐藏加载动画
+        function showLoading() {
+            loading.classList.remove('hidden');
+        }
+        
+        function hideLoading() {
+            loading.classList.add('hidden');
+        }
+        
+        // 开始录音
+        async function startRecording() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream);
+                audioChunks = [];
+                
+                mediaRecorder.ondataavailable = (event) => {
+                    audioChunks.push(event.data);
+                };
+                
+                mediaRecorder.onstop = async () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                    const arrayBuffer = await audioBlob.arrayBuffer();
+                    const bytes = new Uint8Array(arrayBuffer);
+                    const hexString = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+                    
+                    // 发送音频到服务器
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({
+                            type: 'audio_input',
+                            audio: hexString
+                        }));
+                        setStatus('正在识别语音...', false, true);
+                    } else {
+                        setStatus('连接已断开，请刷新页面', true);
+                    }
+                    
+                    // 停止所有音频轨道
+                    stream.getTracks().forEach(track => track.stop());
+                };
+                
+                mediaRecorder.start();
+                isRecording = true;
+                voiceButton.classList.add('recording');
+                buttonText.textContent = '录音中...点击停止';
+                setStatus('正在录音...请说话', false, true);
+                
+            } catch (error) {
+                console.error('录音失败:', error);
+                setStatus('无法访问麦克风，请检查权限设置', true);
+                addMessage('error', '无法访问麦克风。请确保：\n1. 已授予麦克风权限\n2. 使用 HTTPS 或 localhost\n3. 麦克风未被其他应用占用');
+            }
+        }
+        
+        // 停止录音
+        function stopRecording() {
+            if (mediaRecorder && isRecording) {
+                mediaRecorder.stop();
+                isRecording = false;
+                voiceButton.classList.remove('recording');
+                buttonText.textContent = '开始语音对话';
+                setStatus('正在处理录音...', false, true);
+                showLoading();
+            }
+        }
+        
+        // 按钮点击事件
+        voiceButton.addEventListener('click', () => {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                setStatus('正在连接服务器...', false, true);
+                connectWebSocket();
+                setTimeout(() => {
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        if (isRecording) {
+                            stopRecording();
+                        } else {
+                            startRecording();
+                        }
+                    } else {
+                        setStatus('连接失败，请刷新页面重试', true);
+                    }
+                }, 1000);
+            } else {
+                if (isRecording) {
+                    stopRecording();
+                } else {
+                    startRecording();
+                }
+            }
+        });
+        
+        // 页面加载时连接 WebSocket
+        window.addEventListener('load', () => {
+            console.log('页面加载完成，准备连接 WebSocket');
+            connectWebSocket();
+        });
+        
+        // 显示初始化消息
+        console.log('语音日程助手已加载');
+    </script>
+</body>
+</html>

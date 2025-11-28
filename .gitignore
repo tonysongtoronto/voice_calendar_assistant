@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.sqlite3
+
+# Virtual environment
+venv/
+.env/
+.venv/
+
+# VSCode
+.vscode/
+
+# Logs
+*.log
+logs/
+
+# Audio files
+*.wav
+*.mp3
+
+# Playwright
+playwright/.cache/
+
+# Temporary files
+*.tmp
+*.temp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Python packaging
+*.egg-info/
+*.egg
+*.whl
+
+deploy/
+build/
+dist/
+
+# Local storage state
+storage_state.json
+
+# Node / Frontend
+node_modules/
