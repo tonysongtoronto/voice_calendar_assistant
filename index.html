@@ -261,84 +261,157 @@
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const wsUrl = `${protocol}//${window.location.host}/ws/voice`;
             
+            console.log('正在连接 WebSocket:', wsUrl);
             ws = new WebSocket(wsUrl);
             
             ws.onopen = () => {
-                console.log('WebSocket 连接成功');
-                setStatus('已连接到服务器', false, true);
+                console.log('✅ WebSocket 连接成功');
+                setStatus('已连接到服务器，等待欢迎消息...', false, true);
             };
             
             ws.onmessage = async (event) => {
+                console.log('📨 收到服务器消息');
                 const data = JSON.parse(event.data);
+                console.log('消息内容:', data);
                 handleServerMessage(data);
             };
             
             ws.onerror = (error) => {
-                console.error('WebSocket 错误:', error);
+                console.error('❌ WebSocket 错误:', error);
                 setStatus('连接错误，请刷新页面重试', true);
             };
             
             ws.onclose = () => {
-                console.log('WebSocket 连接关闭');
+                console.log('🔌 WebSocket 连接关闭');
                 setStatus('连接已断开');
             };
         }
         
         // 处理服务器消息
         function handleServerMessage(data) {
-            console.log('收到消息:', data);
+            console.log('🔍 处理消息类型:', data.type);
             
             switch(data.type) {
                 case 'audio_response':
+                    console.log('🎵 收到音频响应');
                     hideLoading();
-                    if (data.audio) {
-                        playAudio(data.audio);
-                    }
+                    
+                    // 先显示文字
                     addMessage('assistant', data.text);
+                    
+                    // 播放音频
+                    if (data.audio) {
+                        console.log('🔊 开始播放音频, 音频长度:', data.audio.length);
+                        playAudio(data.audio);
+                    } else {
+                        console.warn('⚠️ 没有音频数据');
+                    }
+                    
                     if (data.success) {
                         setStatus('日程创建成功！', false, true);
                     }
                     break;
                     
                 case 'transcript':
+                    console.log('📝 收到语音识别结果:', data.text);
                     addMessage('user', data.text);
                     showLoading();
                     setStatus('正在处理您的请求...', false, true);
                     break;
                     
                 case 'status':
+                    console.log('ℹ️ 状态消息:', data.message);
                     setStatus(data.message, false, true);
+                    
+                    // 如果状态消息包含音频，也尝试播放
+                    if (data.audio) {
+                        console.log('🔊 状态消息包含音频，开始播放');
+                        playAudio(data.audio);
+                    }
                     break;
                     
                 case 'error':
+                    console.error('❌ 错误消息:', data.message);
                     hideLoading();
                     addMessage('error', data.message);
                     setStatus('处理失败', true);
+                    
+                    // 如果错误消息包含音频，也播放
+                    if (data.audio) {
+                        console.log('🔊 错误消息包含音频，开始播放');
+                        playAudio(data.audio);
+                    }
                     break;
+                    
+                default:
+                    console.warn('⚠️ 未知消息类型:', data.type);
             }
         }
         
         // 播放音频
         function playAudio(base64Audio) {
             try {
+                console.log('🎵 准备播放音频');
+                console.log('音频数据前20个字符:', base64Audio.substring(0, 20));
+                
                 const audioBlob = base64ToBlob(base64Audio, 'audio/mp3');
+                console.log('✅ Blob 创建成功，大小:', audioBlob.size, 'bytes');
+                
                 const audioUrl = URL.createObjectURL(audioBlob);
+                console.log('✅ Audio URL 创建成功:', audioUrl);
+                
                 audioPlayer.src = audioUrl;
-                audioPlayer.play();
+                
+                // 添加播放事件监听
+                audioPlayer.onloadeddata = () => {
+                    console.log('✅ 音频数据加载完成');
+                };
+                
+                audioPlayer.onplay = () => {
+                    console.log('▶️ 音频开始播放');
+                };
+                
+                audioPlayer.onended = () => {
+                    console.log('⏹️ 音频播放完成');
+                    URL.revokeObjectURL(audioUrl);
+                };
+                
+                audioPlayer.onerror = (e) => {
+                    console.error('❌ 音频播放错误:', e);
+                    console.error('错误代码:', audioPlayer.error?.code);
+                    console.error('错误消息:', audioPlayer.error?.message);
+                };
+                
+                // 开始播放
+                const playPromise = audioPlayer.play();
+                if (playPromise !== undefined) {
+                    playPromise
+                        .then(() => {
+                            console.log('✅ 音频播放成功启动');
+                        })
+                        .catch(error => {
+                            console.error('❌ 音频播放失败:', error);
+                        });
+                }
             } catch (error) {
-                console.error('播放音频失败:', error);
+                console.error('❌ 播放音频时出错:', error);
             }
         }
         
         // Base64 转 Blob
         function base64ToBlob(base64, mimeType) {
-            const byteCharacters = atob(base64);
-            const byteNumbers = new Array(byteCharacters.length);
-            for (let i = 0; i < byteCharacters.length; i++) {
-                byteNumbers[i] = byteCharacters.charCodeAt(i);
+            try {
+                const byteCharacters = atob(base64);
+                const byteNumbers = new Array(byteCharacters.length);
+                for (let i = 0; i < byteCharacters.length; i++) {
+                    byteNumbers[i] = byteCharacters.charCodeAt(i);
+                }
+                const byteArray = new Uint8Array(byteNumbers);
+                return new Blob([byteArray], {type: mimeType});
+            } catch (error) {
+                console.error('❌ Base64 转 Blob 失败:', error);
+                throw error;
             }
-            const byteArray = new Uint8Array(byteNumbers);
-            return new Blob([byteArray], {type: mimeType});
         }
         
         // 添加消息到对话框
@@ -464,12 +537,12 @@
         
         // 页面加载时连接 WebSocket
         window.addEventListener('load', () => {
-            console.log('页面加载完成，准备连接 WebSocket');
+            console.log('📄 页面加载完成，准备连接 WebSocket');
             connectWebSocket();
         });
         
         // 显示初始化消息
-        console.log('语音日程助手已加载');
+        console.log('🚀 语音日程助手已加载');
     </script>
 </body>
 </html>

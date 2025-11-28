@@ -136,25 +136,42 @@ async def websocket_voice(websocket: WebSocket):
         # 发送欢迎消息并播放语音
         welcome_text = "您好！我是您的语音日程助手。请点击按钮开始录音，然后告诉我您的日程安排。"
         
-        logger.info("🎤 生成欢迎语音...")
-        welcome_audio = await voice_handler.text_to_speech(welcome_text)
+        logger.info("=" * 60)
+        logger.info("🎤 开始生成欢迎语音...")
+        logger.info(f"欢迎文本: {welcome_text}")
         
-        if welcome_audio:
-            # 发送带语音的欢迎消息
-            await websocket.send_json({
-                "type": "audio_response",
-                "audio": welcome_audio,
-                "text": welcome_text,
-                "success": True
-            })
-            logger.info("✅ 欢迎语音已发送")
-        else:
-            # 语音生成失败，只发送文字
+        try:
+            welcome_audio = await voice_handler.text_to_speech(welcome_text)
+            
+            if welcome_audio:
+                logger.info(f"✅ 欢迎语音生成成功，长度: {len(welcome_audio)} 字符")
+                
+                # 发送带语音的欢迎消息
+                message = {
+                    "type": "audio_response",
+                    "audio": welcome_audio,
+                    "text": welcome_text,
+                    "success": True
+                }
+                
+                await websocket.send_json(message)
+                logger.info("✅ 欢迎消息已发送到客户端")
+                logger.info("=" * 60)
+            else:
+                logger.warning("⚠️ 欢迎语音生成返回空值")
+                # 语音生成失败，只发送文字
+                await websocket.send_json({
+                    "type": "status",
+                    "message": welcome_text
+                })
+                logger.warning("⚠️ 只发送了欢迎文字，没有音频")
+        except Exception as e:
+            logger.error(f"❌ 生成或发送欢迎语音时出错: {e}", exc_info=True)
+            # 至少发送文字消息
             await websocket.send_json({
                 "type": "status",
                 "message": welcome_text
             })
-            logger.warning("⚠️ 欢迎语音生成失败，只发送了文字")
         
         while True:
             # 接收客户端消息
