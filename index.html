@@ -430,10 +430,10 @@
             
             messageDiv.appendChild(label);
             messageDiv.appendChild(textDiv);
-            conversation.appendChild(messageDiv);
+            conversation.insertBefore(messageDiv, conversation.firstChild);
             
-            // 滚动到底部
-            conversation.scrollTop = conversation.scrollHeight;
+            // 滚动到顶部
+            conversation.scrollTop = 0;
         }
         
         // 设置状态文本

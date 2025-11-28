@@ -261,7 +261,7 @@ class CalendarBot:
             return False
 
     async def _manual_login(self):
-        """手动登录流程"""
+        """手动登录流程 - 自动检测登录成功"""
         try:
             logger.info("尝试使用系统 Chrome 浏览器...")
             self.browser = await self.playwright.chromium.launch(
@@ -297,9 +297,24 @@ class CalendarBot:
         logger.info("=" * 60)
         logger.info("📢 请在浏览器中手动登录 Google 账号")
         logger.info("⚠️ 登录完成后，请保持浏览器窗口打开，不要关闭！")
-        logger.info("⚠️ 然后在终端按回车继续...")
+        logger.info("⏳ 程序将自动检测登录状态并继续...")
         logger.info("=" * 60)
-        input("登录完成后按回车继续...")
+        
+        # 自动检测登录成功（循环检查，最多等待5分钟）
+        max_attempts = 50  # 每3秒检查一次，共150秒≈2.5分钟，可调整
+        attempt = 0
+        while attempt < max_attempts:
+            await asyncio.sleep(3)  # 等待3秒后检查
+            attempt += 1
+            logger.info(f"🔍 登录检测中... (第 {attempt}/{max_attempts} 次)")
+            
+            if await self._verify_login():
+                logger.info("✅ 登录成功检测到！")
+                break
+        else:
+            logger.error("❌ 登录检测超时，请检查登录是否完成")
+            raise Exception("登录检测超时")
+        
         await self.context.storage_state(path=str(self.storage_state_path))
         self.is_logged_in = True
         logger.info("✅ 登录状态已保存")
@@ -471,6 +486,17 @@ class CalendarBot:
         }
         
         try:
+            # 新增：检查过去时间，无法安排日程
+            now = datetime.now()
+            if start_time < now:
+                error_msg = "过去的时间无法安排日程"
+                logger.warning(f"⚠️ {error_msg}")
+                # 模拟发回提醒语音（在实际集成中，可替换为语音API调用）
+                print("🗣️ 语音提醒：抱歉，过去的时间无法安排日程。请选择未来的时间。")
+                logger.info("📢 已发送语音提醒消息")
+                result['error'] = error_msg
+                return result
+            
             # 确保浏览器可用
             logger.info("🔍 检查浏览器状态...")
             if not await self._ensure_browser_ready():

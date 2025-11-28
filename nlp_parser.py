@@ -39,8 +39,8 @@ class NLPParser:
         
         # 基础数字映射
         self.chinese_numbers = {
-            "零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
-            "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10
+            "零": 0, "一": 1, "壹": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+            "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10, "拾": 10
         }
 
     def parse_event(self, text: str):
@@ -142,15 +142,15 @@ class NLPParser:
     def _normalize_chinese_numbers_in_date(self, text: str):
         """中文数字日期转阿拉伯数字"""
         # 处理"二十号"、"二十一日"
-        pattern = r"(二十[一二三四五六七八九]?|三十[一]?|[零一二三四五六七八九十]+)\s*号"
+        pattern = r"(二十[一二三四五六七八九]?|三十[一]?|[零一二三四五六七八九十壹拾]+)\s*(号|日)"
         def replace_date_number(match):
             cn_num = match.group(1)
             number = self.chinese_to_number(cn_num)
-            return f"{number}号" if number > 0 else match.group(0)
+            return f"{number}日" if number > 0 else match.group(0)
         text = re.sub(pattern, replace_date_number, text)
         
         # 处理月份
-        month_pattern = r"(十一|十二|[零一二三四五六七八九十]+)月"
+        month_pattern = r"(十一|十二|[零一二三四五六七八九十壹拾]+)月"
         def replace_month_number(match):
             cn_month = match.group(1)
             month = self.chinese_to_number(cn_month)
@@ -164,7 +164,7 @@ class NLPParser:
         text = text.replace(" ", "")
         
         # 处理中文月份:"十一月二十八日"
-        chinese_month_pattern = r"(正月|一月|二月|三月|四月|五月|六月|七月|八月|九月|十月|十一月|十二月)([0-9零一二两三四五六七八九十]+)[日号]"
+        chinese_month_pattern = r"(正月|一月|二月|三月|四月|五月|六月|七月|八月|九月|十月|十一月|十二月)([0-9零一二两三四五六七八九十壹拾]+)[日号]"
         match = re.search(chinese_month_pattern, text)
         if match:
             month_name = match.group(1)
@@ -235,7 +235,7 @@ class NLPParser:
         return None
 
     def _parse_specific_date(self, text: str, today: datetime):
-        """解析具体日期:12月25日、12/25"""
+        """解析具体日期:12月25日、12/25、以及仅日期如11日"""
         patterns = [
             r"(1[0-2]|0?[1-9])月(\d{1,2})[日号]?",
             r"(1[0-2]|0?[1-9])[/\-\.]([0-9]{1,2})",
@@ -257,6 +257,24 @@ class NLPParser:
                 except ValueError:
                     logger.warning(f"❌ 无效日期: {year}-{month}-{day}")
                     continue
+        
+        # 如果没有月份，仅有日期，假设本月，若已过则下月
+        day_only_pattern = r"(\d{1,2})[日号]?"
+        match = re.search(day_only_pattern, text)
+        if match:
+            day = int(match.group(1))
+            year = today.year
+            month = today.month
+            if day < today.day:
+                month += 1
+                if month > 12:
+                    month = 1
+                    year += 1
+            try:
+                return datetime(year, month, day).date()
+            except ValueError:
+                logger.warning(f"❌ 无效日期: {year}-{month}-{day}")
+                return None
         
         return None
 
@@ -368,9 +386,9 @@ class NLPParser:
         text = text.replace(" ", "")
         
         patterns = [
-            (r"(\d+|[零一二两三四五六七八九十]+)\s*天\s*后?", "days"),
-            (r"(\d+|[零一二两三四五六七八九十]+)\s*周\s*后?", "weeks"),
-            (r"(\d+|[零一二两三四五六七八九十]+)\s*个?\s*月\s*后?", "months"),
+            (r"(\d+|[零一二两三四五六七八九十壹拾]+)\s*天\s*后?", "days"),
+            (r"(\d+|[零一二两三四五六七八九十壹拾]+)\s*周\s*后?", "weeks"),
+            (r"(\d+|[零一二两三四五六七八九十壹拾]+)\s*个?\s*月\s*后?", "months"),
         ]
         
         for pattern, unit in patterns:
@@ -504,7 +522,7 @@ class NLPParser:
         if cn == "三十一":
             return 31
         
-        # 处理13-19
+        # 处理13-19, 包括壹
         if cn.startswith("十"):
             unit = cn[1:]
             unit_num = self.chinese_numbers.get(unit, 0)
@@ -553,6 +571,14 @@ if __name__ == "__main__":
         # 复杂表达
         "请安排428回忆下午3点",
         "二十号下午三点开会",
+        
+        # 新增: 日/号 测试
+        "十一号下午2点",
+        "十一日晚上8点",
+        
+        # 新增: 月份发音混淆测试 (假设ASR误认)
+        "十壹月1日下午3点",  # 应解析为11月1日 (next year)
+        "拾月二十五日中午12点",  # 应解析为10月25日
     ]
     
     print("=" * 100)
@@ -579,4 +605,7 @@ if __name__ == "__main__":
     print("- 下周二 = 12-02 (周二)")
     print("- 本周五 = 12-05 (周五,因为今天已经是周五,所以指下周五)")
     print("- 下周 = 12-01 (下周一)")
+    print("- 十一号/十一日 = 2025-12-11 (本月11日已过,指下月11日)")
+    print("- 十壹月1日 = 2026-11-01 (本年11月1日已过,指明年)")
+    print("- 拾月25日 = 2025-10-25 (但10月已过? 按代码逻辑: month=10 <11, so next year 2026-10-25)")
     print("=" * 100)
